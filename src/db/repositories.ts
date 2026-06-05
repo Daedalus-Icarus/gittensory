@@ -563,6 +563,36 @@ export async function listRepoSyncStates(env: Env): Promise<RepoSyncStateRecord[
   return rows.map(toRepoSyncStateRecord);
 }
 
+export async function summarizeRepoSyncOpenPullRequests(env: Env, repoFullNames?: string[]): Promise<{ totalOpenPullRequestsCached: number; reposWithOpenPullRequests: number }> {
+  const db = getDb(env.DB);
+  const aggregate = async (repoNames?: string[]) => {
+    const query = db
+      .select({
+        totalOpenPullRequestsCached: sql<number>`coalesce(sum(case when ${repoSyncState.openPullRequestsCount} > 0 then ${repoSyncState.openPullRequestsCount} else 0 end), 0)`,
+        reposWithOpenPullRequests: sql<number>`coalesce(sum(case when ${repoSyncState.openPullRequestsCount} > 0 then 1 else 0 end), 0)`,
+      })
+      .from(repoSyncState);
+    const [row] = repoNames ? await query.where(inArray(sql`lower(${repoSyncState.repoFullName})`, repoNames)) : await query;
+    return {
+      totalOpenPullRequestsCached: Number(row?.totalOpenPullRequestsCached ?? 0),
+      reposWithOpenPullRequests: Number(row?.reposWithOpenPullRequests ?? 0),
+    };
+  };
+
+  if (repoFullNames === undefined) return aggregate();
+
+  const normalizedRepoNames = Array.from(new Set(repoFullNames.map((name) => name.toLowerCase())));
+  const summary = { totalOpenPullRequestsCached: 0, reposWithOpenPullRequests: 0 };
+  for (let index = 0; index < normalizedRepoNames.length; index += 450) {
+    const chunk = normalizedRepoNames.slice(index, index + 450);
+    if (chunk.length === 0) continue;
+    const chunkSummary = await aggregate(chunk);
+    summary.totalOpenPullRequestsCached += chunkSummary.totalOpenPullRequestsCached;
+    summary.reposWithOpenPullRequests += chunkSummary.reposWithOpenPullRequests;
+  }
+  return summary;
+}
+
 export async function upsertRepoSyncSegment(env: Env, segment: RepoSyncSegmentRecord): Promise<void> {
   const db = getDb(env.DB);
   await db
