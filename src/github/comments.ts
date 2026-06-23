@@ -6,6 +6,7 @@ export const PR_INTELLIGENCE_COMMENT_MARKER = PR_PANEL_COMMENT_MARKER;
 export const AGENT_COMMAND_COMMENT_MARKER = PR_PANEL_COMMENT_MARKER;
 const LEGACY_PR_INTELLIGENCE_COMMENT_MARKER = "<!-- gittensory-pr-intelligence -->";
 const LEGACY_AGENT_COMMAND_COMMENT_MARKER = "<!-- gittensory-agent-command -->";
+const LEGACY_GITTENSORY_APP_BOT_LOGINS = ["reviewwed[bot]"];
 const COMMENT_SEARCH_PAGE_LIMIT = 3;
 
 type IssueComment = {
@@ -53,7 +54,6 @@ async function createOrUpdateIssueCommentWithMarker(
 
   const token = await createInstallationToken(env, installationId);
   const octokit = new Octokit({ auth: token });
-  const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
   const markers = markerAliases(marker);
   let existing: IssueComment | undefined;
   for (let page = 1; !existing && page <= COMMENT_SEARCH_PAGE_LIMIT; page += 1) {
@@ -65,7 +65,7 @@ async function createOrUpdateIssueCommentWithMarker(
       page,
     });
     const batch = response.data as IssueComment[];
-    existing = batch.find((comment) => isGittensoryBotComment(comment, botLogin) && markers.some((candidate) => comment.body?.includes(candidate)));
+    existing = batch.find((comment) => isManagedGittensoryBotComment(comment, env) && markers.some((candidate) => comment.body?.includes(candidate)));
     if (batch.length < 100) break;
   }
   if (existing) {
@@ -87,8 +87,15 @@ async function createOrUpdateIssueCommentWithMarker(
   return response.data as { id: number; html_url?: string };
 }
 
-function isGittensoryBotComment(comment: IssueComment, botLogin: string): boolean {
-  return comment.user?.type === "Bot" && comment.user.login?.toLowerCase() === botLogin.toLowerCase();
+export function isManagedGittensoryBotLogin(login: string | null | undefined, env: Pick<Env, "GITHUB_APP_SLUG">): boolean {
+  const normalized = login?.toLowerCase();
+  if (!normalized) return false;
+  if (normalized === `${env.GITHUB_APP_SLUG}[bot]`.toLowerCase()) return true;
+  return LEGACY_GITTENSORY_APP_BOT_LOGINS.includes(normalized);
+}
+
+function isManagedGittensoryBotComment(comment: IssueComment, env: Pick<Env, "GITHUB_APP_SLUG">): boolean {
+  return comment.user?.type === "Bot" && isManagedGittensoryBotLogin(comment.user.login, env);
 }
 
 function markerAliases(_marker: string): string[] {

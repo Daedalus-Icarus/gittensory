@@ -1837,6 +1837,7 @@ export function createApp() {
       secrets: {
         githubAppPrivateKey: Boolean(c.env.GITHUB_APP_PRIVATE_KEY),
         githubWebhookSecret: Boolean(c.env.GITHUB_WEBHOOK_SECRET),
+        githubWebhookSecretPrevious: Boolean(c.env.GITHUB_WEBHOOK_SECRET_PREVIOUS),
         githubPublicToken: Boolean(c.env.GITHUB_PUBLIC_TOKEN),
         apiToken: Boolean(c.env.GITTENSORY_API_TOKEN),
         mcpToken: Boolean(c.env.GITTENSORY_MCP_TOKEN),

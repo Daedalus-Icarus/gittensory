@@ -76,6 +76,43 @@ describe("github webhook enqueue failure (#786)", () => {
   });
 });
 
+describe("github webhook secret rotation window", () => {
+  it("accepts a payload signed with the previous secret during an atomic swap", async () => {
+    const env = createTestEnv({ GITHUB_WEBHOOK_SECRET: "new-secret", GITHUB_WEBHOOK_SECRET_PREVIOUS: "old-secret" });
+    let sendCount = 0;
+    env.JOBS = {
+      send: async () => {
+        sendCount += 1;
+      },
+    } as unknown as typeof env.JOBS;
+    const rawBody = JSON.stringify({ action: "opened", repository: { full_name: "JSONbored/gittensory" }, installation: { id: 1 } });
+    const signature = await signWebhook(rawBody, "old-secret");
+    const request = new Request("https://example.com/webhook", { method: "POST", body: rawBody });
+    const headers: Record<string, string> = {
+      "x-github-delivery": "rotation-window-1",
+      "x-github-event": "pull_request",
+      "x-hub-signature-256": signature,
+    };
+    const context = {
+      req: {
+        raw: request,
+        header(name: string) {
+          return headers[name.toLowerCase()] ?? null;
+        },
+      },
+      env,
+      json(payload: unknown, status?: number) {
+        return Response.json(payload, status === undefined ? undefined : { status });
+      },
+    } as unknown as Context<{ Bindings: Env }>;
+
+    const response = await handleGitHubWebhook(context);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, status: "queued" });
+    expect(sendCount).toBe(1);
+  });
+});
+
 describe("github webhook dedup (#789)", () => {
   it("suppresses redelivery of an already-processed event instead of re-running side effects", async () => {
     const env = createTestEnv();

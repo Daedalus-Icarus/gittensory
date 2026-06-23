@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createOpaqueToken, hashToken, timingSafeEqual } from "../../src/auth/security";
-import { verifyGitHubSignature } from "../../src/utils/crypto";
+import { verifyGitHubSignature, verifyGitHubSignatureAgainstAny } from "../../src/utils/crypto";
 
 describe("webhook signature verification", () => {
   it("accepts valid GitHub HMAC signatures and rejects tampering", async () => {
@@ -17,6 +17,18 @@ describe("webhook signature verification", () => {
     await expect(verifyGitHubSignature(body, null, secret)).resolves.toBe(false);
     await expect(verifyGitHubSignature(body, "bad-prefix", secret)).resolves.toBe(false);
     await expect(verifyGitHubSignature(body, `sha256=${signature}`, "")).resolves.toBe(false);
+  });
+
+  it("accepts either the current or previous webhook secret during an atomic rotation window", async () => {
+    const oldSecret = "old-secret";
+    const newSecret = "new-secret";
+    const body = JSON.stringify({ action: "synchronize" });
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(oldSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+    const signature = `sha256=${[...new Uint8Array(signed)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+
+    await expect(verifyGitHubSignatureAgainstAny(body, signature, [newSecret, oldSecret])).resolves.toBe(true);
+    await expect(verifyGitHubSignatureAgainstAny(body, signature, [newSecret, null])).resolves.toBe(false);
   });
 
   it("uses timing-safe token comparisons and one-way token hashes", async () => {

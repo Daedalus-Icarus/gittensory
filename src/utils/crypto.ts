@@ -21,6 +21,18 @@ export async function verifyGitHubSignature(rawBody: string, signatureHeader: st
   return timingSafeEqualHex(actual, expected);
 }
 
+export async function verifyGitHubSignatureAgainstAny(
+  rawBody: string,
+  signatureHeader: string | null,
+  secrets: readonly (string | null | undefined)[],
+): Promise<boolean> {
+  for (const secret of secrets) {
+    if (!secret) continue;
+    if (await verifyGitHubSignature(rawBody, signatureHeader, secret)) return true;
+  }
+  return false;
+}
+
 export function timingSafeEqualHex(left: string, right: string): boolean {
   const leftBytes = hexToBytes(left);
   const rightBytes = hexToBytes(right);

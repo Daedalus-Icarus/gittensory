@@ -209,6 +209,8 @@ specific capability and degrade safely when absent.
 **Core (required):**
 
 - `GITHUB_WEBHOOK_SECRET`
+- `GITHUB_WEBHOOK_SECRET_PREVIOUS` — optional atomic-rotation window secret; when set, webhook
+  verification accepts either the current or previous secret so GitHub can be flipped with zero 401 window.
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY`
 - `GITHUB_APP_SLUG`

@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { getWebhookEvent, recordWebhookEvent } from "../db/repositories";
 import type { GitHubWebhookPayload, JobMessage } from "../types";
-import { sha256Hex, verifyGitHubSignature } from "../utils/crypto";
+import { sha256Hex, verifyGitHubSignatureAgainstAny } from "../utils/crypto";
 
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -23,7 +23,7 @@ export async function handleGitHubWebhook(c: Context<{ Bindings: Env }>): Promis
   if (rawBody === null) {
     return c.json({ error: "payload_too_large", maxBytes: maxBodyBytes }, 413);
   }
-  const verified = await verifyGitHubSignature(rawBody, signature, c.env.GITHUB_WEBHOOK_SECRET);
+  const verified = await verifyGitHubSignatureAgainstAny(rawBody, signature, [c.env.GITHUB_WEBHOOK_SECRET, c.env.GITHUB_WEBHOOK_SECRET_PREVIOUS]);
   if (!verified) {
     return c.json({ error: "invalid_signature" }, 401);
   }

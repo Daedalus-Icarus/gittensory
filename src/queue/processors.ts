@@ -74,7 +74,13 @@ import {
 } from "../github/backfill";
 import { contributorRepoStatsFromGittensor, fetchGittensorContributorSnapshot, fetchOfficialGittensorMiner, type GittensorContributorSnapshot, type OfficialGittensorMinerDetection } from "../gittensor/api";
 import { createInstallationToken, createOrUpdateCheckRun, createOrUpdateErroredGateCheckRun, createOrUpdateGateCheckRun, createOrUpdateOverriddenGateCheckRun, createOrUpdatePendingGateCheckRun, createOrUpdateSkippedGateCheckRun, getInstallationId, getRepositoryCollaboratorPermission } from "../github/app";
-import { AGENT_COMMAND_COMMENT_MARKER, createOrUpdateAgentCommandComment, createOrUpdatePrIntelligenceComment, PR_PANEL_COMMENT_MARKER } from "../github/comments";
+import {
+  AGENT_COMMAND_COMMENT_MARKER,
+  createOrUpdateAgentCommandComment,
+  createOrUpdatePrIntelligenceComment,
+  isManagedGittensoryBotLogin,
+  PR_PANEL_COMMENT_MARKER,
+} from "../github/comments";
 import { gittensoryFooter, gittensorRepoEarnUrl } from "../github/footer";
 import {
   buildMaintainerQueueDigest,
@@ -2738,7 +2744,7 @@ function escapeRegExp(value: string): string {
 }
 
 function isGittensoryPanelBotComment(env: Env, user: NonNullable<GitHubWebhookPayload["comment"]>["user"] | undefined): boolean {
-  return user?.type === "Bot" && user.login?.toLowerCase() === `${env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
+  return user?.type === "Bot" && isManagedGittensoryBotLogin(user.login, env);
 }
 
 async function recordPrPanelRetriggerSkip(

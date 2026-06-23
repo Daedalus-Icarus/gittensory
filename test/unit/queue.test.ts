@@ -2237,6 +2237,79 @@ describe("queue processors", () => {
     });
   });
 
+  it("reruns a legacy reviewwed bot panel during app identity cutover", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicAudienceMode: "oss_maintainer",
+      linkedIssueGateMode: "advisory",
+      duplicatePrGateMode: "advisory",
+      qualityGateMode: "advisory",
+      slopGateMode: "advisory",
+      mergeReadinessGateMode: "advisory",
+      manifestPolicyGateMode: "advisory",
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {});
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", {
+      number: 49,
+      title: "Refresh legacy panel",
+      state: "open",
+      user: { login: "contributor" },
+      author_association: "CONTRIBUTOR",
+      head: { sha: "legacypanel123" },
+      labels: [],
+      body: "Validation: npm test",
+    });
+    const checkedPanel = ["<!-- gittensory-pr-panel:v1 -->", "", "- [x] <!-- gittensory-rerun-review:v1 --> Re-run Gittensory review"].join("\n");
+    let patchedBody = "";
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") {
+        return Response.json([
+          { uid: 7, githubUsername: "contributor", githubId: "123", totalPrs: 4, totalMergedPrs: 3, totalOpenPrs: 1, totalClosedPrs: 0, totalOpenIssues: 0, totalClosedIssues: 0, totalSolvedIssues: 0, totalValidSolvedIssues: 0, isEligible: true, credibility: 1, eligibleRepoCount: 1 },
+        ]);
+      }
+      if (url === "https://api.gittensor.io/miners/123") {
+        return Response.json({ repositories: [{ repositoryFullName: "JSONbored/gittensory", totalPrs: "4", totalMergedPrs: "3", totalOpenPrs: "1", totalClosedIssues: "0", totalOpenIssues: "0", isEligible: true, credibility: "1.000000" }] });
+      }
+      if (url === "https://api.gittensor.io/miners/123/prs") return Response.json([]);
+      if (url === "https://mirror.gittensor.io/api/v1/miners/123/issues") return Response.json({ issues: [] });
+      if (url.endsWith("/users/contributor")) return Response.json({ login: "contributor", public_repos: 2, followers: 1 });
+      if (url.includes("/users/contributor/repos")) return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/collaborators/maintainer/permission")) return Response.json({ permission: "maintain" });
+      if (url.includes("/issues/49/comments") && method === "GET") {
+        return Response.json([{ id: 809, body: checkedPanel, user: { login: "reviewwed[bot]", type: "Bot" } }]);
+      }
+      if (url.includes("/issues/comments/809") && method === "PATCH") {
+        patchedBody = String((JSON.parse(String(init?.body ?? "{}")) as { body?: string }).body ?? "");
+        return Response.json({ id: 809 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "panel-retrigger-legacy-reviewwed",
+      eventName: "issue_comment",
+      payload: {
+        action: "edited",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        issue: { number: 49, title: "Refresh panel", state: "open", user: { login: "contributor" }, pull_request: {} },
+        comment: { id: 809, body: checkedPanel, user: { login: "reviewwed[bot]", type: "Bot" } },
+        sender: { login: "maintainer", type: "User" },
+      },
+    });
+
+    expect(patchedBody).toContain("<!-- gittensory-pr-panel:v1 -->");
+    expect(patchedBody).toContain("Readiness score:");
+    expect(patchedBody).toContain("- [ ] <!-- gittensory-rerun-review:v1 --> Re-run Gittensory review");
+  });
+
   it("reruns the sticky PR panel when a write collaborator checks the rerun task", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);

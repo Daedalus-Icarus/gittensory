@@ -37,6 +37,10 @@ declare global {
     AI_GATEWAY_ID?: string;
     ADMIN_GITHUB_LOGINS?: string;
     GITHUB_WEBHOOK_SECRET: string;
+    /** Optional rotation window secret for an atomic GitHub webhook-secret swap. When set, signature
+     *  verification accepts EITHER the current secret OR this previous secret, so GitHub can be flipped
+     *  with zero 401 window before the old secret is retired. */
+    GITHUB_WEBHOOK_SECRET_PREVIOUS?: string;
     GITHUB_WEBHOOK_MAX_BODY_BYTES?: string;
     GITHUB_APP_PRIVATE_KEY: string;
     GITHUB_APP_ID: string;
