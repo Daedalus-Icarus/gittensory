@@ -2918,7 +2918,7 @@ async function maybePublishPrPublicSurface(
       // must render "held for review", not "✅ safe to merge". Compute the SAME guardrail-hit the disposition uses
       // (shared isGuardrailHit) and thread it so the signal and the action agree (the #4220 class, clean variant).
       const heldForReview = isGuardrailHit(
-        unifiedFiles.map((file) => file.path),
+        changedPathsForGuardrail(unifiedFiles),
         await loadHardGuardrailGlobs(env, repoFullName),
       );
       // Held-vs-closed parity (#8/#9): the disposition NEVER auto-closes an owner / automation-bot PR, so a gate
