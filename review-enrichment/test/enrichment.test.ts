@@ -15,6 +15,12 @@ import {
   scanActionPins,
 } from "../dist/analyzers/actions-pin.js";
 import { scanEol, extractVersionPins } from "../dist/analyzers/eol-check.js";
+import {
+  extractRegexSources,
+  hasCatastrophicBacktracking,
+  scanPatchForRedos,
+  scanRedos,
+} from "../dist/analyzers/redos.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -592,6 +598,114 @@ test("buildBrief: action-pin analyzer runs (pure, no network)", async () => {
     assert.equal(brief.analyzerStatus.actionPin, "ok");
     assert.equal(brief.findings.actionPin.length, 1);
     assert.match(brief.promptSection, /Unpinned GitHub Actions/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("hasCatastrophicBacktracking: flags nested unbounded quantifiers, not linear/bounded shapes", () => {
+  for (const vuln of [
+    "(a+)+",
+    "(a*)*",
+    "(a+)*",
+    "(.*)+",
+    "(\\d+){2,}",
+    "([a-z]+)+",
+    "((ab)+)+",
+  ]) {
+    assert.equal(hasCatastrophicBacktracking(vuln), true, vuln);
+  }
+  for (const safe of [
+    "(abc)+",
+    "[a-z]+",
+    "(a+)?",
+    "(a+){2,4}",
+    "abc",
+    "(a|b)+",
+    "\\(a+\\)+",
+  ]) {
+    assert.equal(hasCatastrophicBacktracking(safe), false, safe);
+  }
+});
+
+test("extractRegexSources: linear scan, no catastrophic backtracking on adversarial char classes (#1503 regression)", () => {
+  // The former LITERAL_RE extractor backtracked exponentially on many empty `[]` classes with no closing slash;
+  // the linear scanner returns immediately (a regression would hang this test).
+  const adversarial = "x = /" + "[]".repeat(800);
+  assert.deepEqual(extractRegexSources(adversarial), []);
+  // Well-formed literals (incl. char classes + flags) and RegExp() ctors still extract correctly:
+  assert.deepEqual(extractRegexSources("const r = /[a-z][0-9]+/g;"), [
+    "[a-z][0-9]+",
+  ]);
+  assert.deepEqual(extractRegexSources('new RegExp("(a+)+")'), ["(a+)+"]);
+  // `a / b` division is not mistaken for a regex literal:
+  assert.deepEqual(extractRegexSources("const n = a / b;"), []);
+});
+
+test("scanPatchForRedos: flags added ReDoS literals + RegExp(...) ctors, line-cited; ignores context + safe regex", () => {
+  const patch = [
+    "@@ -1,1 +1,4 @@",
+    " const ok = /(abc)+/;",
+    "+const bad = /(a+)+$/;",
+    "+const safe = /[a-z]+/;",
+    '+const ctor = new RegExp("(\\\\d+)*x");',
+  ].join("\n");
+  const findings = scanPatchForRedos("src/x.ts", patch);
+  assert.deepEqual(
+    findings.map(({ file, line, kind }) => ({ file, line, kind })),
+    [
+      { file: "src/x.ts", line: 2, kind: "nested-quantifier" },
+      { file: "src/x.ts", line: 4, kind: "nested-quantifier" },
+    ],
+  );
+  assert.equal(findings[0].pattern, "(a+)+$");
+});
+
+test("scanRedos: scans every changed file's added lines, caps to its budget", async () => {
+  const findings = await scanRedos({
+    repoFullName: "o/r",
+    prNumber: 1,
+    files: [
+      { path: "src/a.ts", patch: "@@ -1,0 +1,1 @@\n+const r = /(x+)+/;" },
+      { path: "src/b.ts", patch: "@@ -1,0 +1,1 @@\n+const r = /[0-9]+/;" },
+      { path: "README.md", patch: undefined },
+    ],
+  });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, "src/a.ts");
+});
+
+test("renderBrief: renders the ReDoS block, code-spanning + sanitizing the pattern", () => {
+  const r = renderBrief({
+    redos: [
+      {
+        file: "src/re.ts",
+        line: 7,
+        kind: "nested-quantifier",
+        pattern: "(a+)+ ",
+      },
+    ],
+  });
+  assert.match(r.promptSection, /ReDoS-prone regex/);
+  assert.match(r.promptSection, /`src\/re\.ts:7`/);
+  assert.match(r.promptSection, /`\(a\+\)\+/);
+  assert.doesNotMatch(r.promptSection, / /); // control char in the pattern is neutralized
+});
+
+test("buildBrief: ReDoS analyzer runs (pure, no network)", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      files: [
+        { path: "src/x.ts", patch: "@@ -1,0 +1,1 @@\n+const r = /(a+)+$/;" },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.redos, "ok");
+    assert.equal(brief.findings.redos.length, 1);
+    assert.match(brief.promptSection, /ReDoS-prone regex/);
   } finally {
     globalThis.fetch = realFetch;
   }

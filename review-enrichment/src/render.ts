@@ -117,6 +117,18 @@ export function renderBrief(
     }
   }
 
+  const redos = findings.redos ?? [];
+  if (redos.length) {
+    lines.push(
+      "### ReDoS-prone regex (catastrophic backtracking — DoS on attacker-controlled input)",
+    );
+    for (const item of redos) {
+      lines.push(
+        `- ${safeCodeSpan(`${item.file}:${item.line}`)} — ${safeCodeSpan(item.pattern)} nests an unbounded quantifier inside an unbounded-quantified group; bound the repetition or rewrite without nesting`,
+      );
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =
