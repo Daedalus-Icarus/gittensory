@@ -18,6 +18,7 @@ import { scanProvenance } from "./analyzers/provenance.js";
 import { scanCodeowners } from "./analyzers/codeowners.js";
 import { scanSecretLog } from "./analyzers/secret-log.js";
 import { scanAssetWeight } from "./analyzers/asset-weight.js";
+import { scanExportedApi } from "./analyzers/exported-api.js";
 import { renderBrief } from "./render.js";
 
 type AnalyzerFn = (req: EnrichRequest, signal: AbortSignal) => Promise<unknown>;
@@ -35,6 +36,7 @@ const ANALYZERS: Record<keyof BriefFindings, AnalyzerFn> = {
   codeowners: (req, signal) => scanCodeowners(req, fetch, { signal }),
   secretLog: (req, signal) => scanSecretLog(req, signal),
   assetWeight: (req, signal) => scanAssetWeight(req, fetch, { signal }),
+  exportedApi: (req, signal) => scanExportedApi(req, fetch, { signal }),
 };
 
 function runWithTimeout<T>(

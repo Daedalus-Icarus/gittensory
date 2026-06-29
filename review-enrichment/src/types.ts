@@ -133,6 +133,19 @@ export interface AssetWeightFinding {
   status: "added" | "grown";
 }
 
+/** A semver-major change in a published package's exported declaration surface, detected by comparing the
+ *  currently-published npm tarball to the post-PR declaration surface reconstructed from the diff. */
+export interface ExportedApiFinding {
+  package: string;
+  publishedVersion: string;
+  entrypoint: string;
+  typePath: string;
+  kind: "removed-entrypoint" | "removed-export" | "signature-changed";
+  symbol?: string;
+  before?: string;
+  after?: string;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -146,6 +159,7 @@ export interface BriefFindings {
   codeowners?: CodeownersFinding[];
   secretLog?: SecretLogFinding[];
   assetWeight?: AssetWeightFinding[];
+  exportedApi?: ExportedApiFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

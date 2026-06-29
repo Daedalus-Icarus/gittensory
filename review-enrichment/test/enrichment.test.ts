@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { gzipSync } from "node:zlib";
 import {
   extractDependencyChanges,
   queryOsv,
@@ -42,6 +44,13 @@ import {
   scanPatchForSecretLog,
   scanSecretLog,
 } from "../dist/analyzers/secret-log.js";
+import {
+  applyUnifiedPatch,
+  extractPackageNameFromPatch,
+  extractTarTextFiles,
+  extractTypeEntrypoints,
+  scanExportedApi,
+} from "../dist/analyzers/exported-api.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -71,6 +80,34 @@ const pkgPatch = (name) => ({
   prNumber: 1,
   files: [{ path: "package.json", patch: `+    "${name}": "1.0.0",` }],
 });
+
+function makeTarGz(files) {
+  const parts = [];
+  for (const [name, content] of Object.entries(files)) {
+    const body = Buffer.from(content, "utf8");
+    const header = Buffer.alloc(512, 0);
+    header.write(`package/${name}`);
+    header.write("0000777", 100);
+    header.write("0000000", 108);
+    header.write("0000000", 116);
+    header.write(body.length.toString(8).padStart(11, "0"), 124);
+    header.write("00000000000", 136);
+    header.fill(" ", 148, 156);
+    header.write("0", 156);
+    header.write("ustar", 257);
+    header.write("00", 263);
+    let checksum = 0;
+    for (const byte of header) checksum += byte;
+    header.write(checksum.toString(8).padStart(6, "0"), 148);
+    header[154] = 0;
+    header[155] = 32;
+    parts.push(header, body);
+    const remainder = body.length % 512;
+    if (remainder) parts.push(Buffer.alloc(512 - remainder, 0));
+  }
+  parts.push(Buffer.alloc(1024, 0));
+  return gzipSync(Buffer.concat(parts));
+}
 
 const okFetch = (vulns) => async () => ({
   ok: true,
@@ -2159,6 +2196,317 @@ test("buildBrief: provenance analyzer fetch failure fails safe", async () => {
     assert.equal(brief.analyzerStatus.provenance, "ok");
     assert.equal(brief.partial, false);
     assert.deepEqual(brief.findings.provenance, []);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("extractPackageNameFromPatch: reads the package name from diff context", () => {
+  assert.equal(
+    extractPackageNameFromPatch(
+      [
+        "@@ -1,4 +1,4 @@",
+        ' {',
+        '   "name": "@scope/pkg",',
+        '-  "version": "1.0.0",',
+        '+  "version": "1.0.1",',
+      ].join("\n"),
+    ),
+    "@scope/pkg",
+  );
+  assert.equal(extractPackageNameFromPatch('+  "version": "1.0.1",'), null);
+});
+
+test("applyUnifiedPatch: reconstructs modified text and rejects mismatched context", () => {
+  const base = [
+    "export declare function foo(input: string): number;",
+    "export declare const version: string;",
+  ].join("\n");
+  const patch = [
+    "@@ -1,2 +1,1 @@",
+    '-export declare function foo(input: string): number;',
+    '-export declare const version: string;',
+    '+export declare function foo(input: number): number;',
+  ].join("\n");
+  assert.equal(
+    applyUnifiedPatch(base, patch),
+    "export declare function foo(input: number): number;",
+  );
+  assert.equal(
+    applyUnifiedPatch(base, "@@ -1,1 +1,1 @@\n-wrong\n+right"),
+    null,
+  );
+});
+
+test("extractTypeEntrypoints: resolves exports.types and root types fallback", () => {
+  const exportsMap = extractTypeEntrypoints({
+    exports: {
+      ".": { types: "./dist/index.d.ts" },
+      "./cli": { import: "./dist/cli.js", types: "./dist/cli.d.ts" },
+    },
+  });
+  assert.deepEqual([...exportsMap.entries()], [
+    [".", "dist/index.d.ts"],
+    ["./cli", "dist/cli.d.ts"],
+  ]);
+
+  const fallback = extractTypeEntrypoints({ types: "./types/index.d.ts" });
+  assert.deepEqual([...fallback.entries()], [[".", "types/index.d.ts"]]);
+});
+
+test("extractTarTextFiles: keeps package.json and declarations from npm tarballs", () => {
+  const archive = makeTarGz({
+    "package.json": '{"name":"@scope/pkg"}',
+    "dist/index.d.ts": "export declare const version: string;",
+    "dist/index.js": "exports.version = '1';",
+  });
+  const files = extractTarTextFiles(archive);
+  assert.equal(files.get("package.json"), '{"name":"@scope/pkg"}');
+  assert.equal(
+    files.get("dist/index.d.ts"),
+    "export declare const version: string;",
+  );
+  assert.equal(files.has("dist/index.js"), false);
+});
+
+test("scanExportedApi: flags removed exports and signature changes against the published tarball", async () => {
+  const tarball = makeTarGz({
+    "package.json": JSON.stringify({
+      name: "@scope/pkg",
+      version: "1.0.0",
+      exports: { ".": { types: "./dist/index.d.ts" } },
+    }),
+    "dist/index.d.ts": [
+      'export { foo } from "./internal";',
+      "export declare const version: string;",
+    ].join("\n"),
+    "dist/internal.d.ts": "export declare function foo(input: string): number;",
+  });
+  const findings = await scanExportedApi(
+    {
+      repoFullName: "owner/repo",
+      prNumber: 1,
+      files: [
+        {
+          path: "packages/pkg/package.json",
+          patch: [
+            "@@ -1,5 +1,5 @@",
+            " {",
+            '   "name": "@scope/pkg",',
+            '-  "version": "1.0.0",',
+            '+  "version": "1.0.1",',
+            '   "exports": { ".": { "types": "./dist/index.d.ts" } }',
+            " }",
+          ].join("\n"),
+        },
+        {
+          path: "packages/pkg/dist/internal.d.ts",
+          patch: [
+            "@@ -1,1 +1,1 @@",
+            '-export declare function foo(input: string): number;',
+            '+export declare function foo(input: number): number;',
+          ].join("\n"),
+        },
+        {
+          path: "packages/pkg/dist/index.d.ts",
+          patch: [
+            "@@ -1,2 +1,1 @@",
+            ' export { foo } from "./internal";',
+            '-export declare const version: string;',
+          ].join("\n"),
+        },
+      ],
+    },
+    async (url) => {
+      const value = String(url);
+      if (value === "https://registry.npmjs.org/%40scope%2Fpkg") {
+        return {
+          ok: true,
+          json: async () => ({
+            "dist-tags": { latest: "1.0.0" },
+            versions: {
+              "1.0.0": { dist: { tarball: "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz" } },
+            },
+          }),
+        };
+      }
+      if (value === "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz") {
+        return { ok: true, arrayBuffer: async () => tarball };
+      }
+      throw new Error(`unexpected fetch ${value}`);
+    },
+  );
+  assert.deepEqual(
+    findings.map(({ kind, symbol }) => ({ kind, symbol })),
+    [
+      { kind: "signature-changed", symbol: "foo" },
+      { kind: "removed-export", symbol: "version" },
+    ],
+  );
+  assert.equal(findings[0].package, "@scope/pkg");
+  assert.equal(findings[0].publishedVersion, "1.0.0");
+});
+
+test("scanExportedApi: flags removed exported entrypoints", async () => {
+  const tarball = makeTarGz({
+    "package.json": JSON.stringify({
+      name: "@scope/pkg",
+      version: "1.0.0",
+      exports: {
+        ".": { types: "./dist/index.d.ts" },
+        "./cli": { types: "./dist/cli.d.ts" },
+      },
+    }),
+    "dist/index.d.ts": "export declare const ok: true;",
+    "dist/cli.d.ts": "export declare function main(): void;",
+  });
+  const findings = await scanExportedApi(
+    {
+      repoFullName: "owner/repo",
+      prNumber: 2,
+      files: [
+        {
+          path: "packages/pkg/package.json",
+          patch: [
+            "@@ -1,7 +1,6 @@",
+            " {",
+            '   "name": "@scope/pkg",',
+            '   "version": "1.0.0",',
+            '   "exports": {',
+            '     ".": { "types": "./dist/index.d.ts" },',
+            '-    "./cli": { "types": "./dist/cli.d.ts" }',
+            "   }",
+            " }",
+          ].join("\n"),
+        },
+      ],
+    },
+    async (url) => {
+      const value = String(url);
+      if (value === "https://registry.npmjs.org/%40scope%2Fpkg") {
+        return {
+          ok: true,
+          json: async () => ({
+            "dist-tags": { latest: "1.0.0" },
+            versions: {
+              "1.0.0": { dist: { tarball: "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz" } },
+            },
+          }),
+        };
+      }
+      if (value === "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz") {
+        return { ok: true, arrayBuffer: async () => tarball };
+      }
+      throw new Error(`unexpected fetch ${value}`);
+    },
+  );
+  assert.deepEqual(
+    findings.map(({ kind, entrypoint }) => ({ kind, entrypoint })),
+    [{ kind: "removed-entrypoint", entrypoint: "./cli" }],
+  );
+});
+
+test("scanExportedApi: fails safe when the diff does not expose a package name", async () => {
+  let called = false;
+  const findings = await scanExportedApi(
+    {
+      repoFullName: "owner/repo",
+      prNumber: 3,
+      files: [
+        {
+          path: "packages/pkg/package.json",
+          patch: '+  "version": "1.0.1",',
+        },
+      ],
+    },
+    async () => {
+      called = true;
+      throw new Error("should not fetch");
+    },
+  );
+  assert.deepEqual(findings, []);
+  assert.equal(called, false);
+});
+
+test("renderBrief: renders exported API breaking changes", () => {
+  const rendered = renderBrief({
+    exportedApi: [
+      {
+        package: "@scope/pkg",
+        publishedVersion: "1.0.0",
+        entrypoint: ".",
+        typePath: "dist/index.d.ts",
+        kind: "signature-changed",
+        symbol: "foo",
+        before: "function foo(input:string):number;",
+        after: "function foo(input:number):number;",
+      },
+    ],
+  });
+  assert.match(rendered.promptSection, /Exported API breaking changes/);
+  assert.match(rendered.promptSection, /`@scope\/pkg@1\.0\.0`/);
+  assert.match(rendered.promptSection, /changes `foo` from/);
+});
+
+test("buildBrief: exported-api analyzer runs against a published tarball", async () => {
+  const tarball = makeTarGz({
+    "package.json": JSON.stringify({
+      name: "@scope/pkg",
+      version: "1.0.0",
+      exports: { ".": { types: "./dist/index.d.ts" } },
+    }),
+    "dist/index.d.ts": "export declare function foo(input: string): number;",
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value === "https://registry.npmjs.org/%40scope%2Fpkg") {
+      return {
+        ok: true,
+        json: async () => ({
+          "dist-tags": { latest: "1.0.0" },
+          versions: {
+            "1.0.0": { dist: { tarball: "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz" } },
+          },
+        }),
+      };
+    }
+    if (value === "https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz") {
+      return { ok: true, arrayBuffer: async () => tarball };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const brief = await buildBrief({
+      repoFullName: "owner/repo",
+      prNumber: 4,
+      analyzers: ["exportedApi"],
+      files: [
+        {
+          path: "packages/pkg/package.json",
+          patch: [
+            "@@ -1,5 +1,5 @@",
+            " {",
+            '   "name": "@scope/pkg",',
+            '-  "version": "1.0.0",',
+            '+  "version": "1.0.1",',
+            '   "exports": { ".": { "types": "./dist/index.d.ts" } }',
+            " }",
+          ].join("\n"),
+        },
+        {
+          path: "packages/pkg/dist/index.d.ts",
+          patch: [
+            "@@ -1,1 +1,1 @@",
+            '-export declare function foo(input: string): number;',
+            '+export declare function foo(input: number): number;',
+          ].join("\n"),
+        },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.exportedApi, "ok");
+    assert.equal(brief.findings.exportedApi.length, 1);
+    assert.match(brief.promptSection, /Exported API breaking changes/);
   } finally {
     globalThis.fetch = realFetch;
   }

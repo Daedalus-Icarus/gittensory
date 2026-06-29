@@ -215,6 +215,34 @@ export function renderBrief(
     }
   }
 
+  const exportedApi = findings.exportedApi ?? [];
+  if (exportedApi.length) {
+    lines.push(
+      "### Exported API breaking changes (semver-major surface change)",
+    );
+    for (const item of exportedApi) {
+      const pkg = safeCodeSpan(`${item.package}@${item.publishedVersion}`);
+      const entry = safeCodeSpan(item.entrypoint);
+      const path = safeCodeSpan(item.typePath);
+      if (item.kind === "removed-entrypoint") {
+        lines.push(
+          `- ${pkg} no longer exposes entrypoint ${entry} (${path})`,
+        );
+        continue;
+      }
+      const symbol = safeCodeSpan(item.symbol ?? "unknown");
+      if (item.kind === "removed-export") {
+        lines.push(
+          `- ${pkg} entrypoint ${entry} (${path}) no longer exports ${symbol}`,
+        );
+        continue;
+      }
+      lines.push(
+        `- ${pkg} entrypoint ${entry} (${path}) changes ${symbol} from ${safeCodeSpan(item.before ?? "unknown")} to ${safeCodeSpan(item.after ?? "unknown")}`,
+      );
+    }
+  }
+
   if (!lines.length) return { promptSection: "", systemSuffix: "" };
 
   const header =
