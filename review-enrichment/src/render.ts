@@ -65,9 +65,7 @@ export function renderBrief(
           (SEVERITY_RANK[b.cve.severity] ?? 4),
       );
     for (const { dep, cve } of flat) {
-      const fix = cve.fixedIn
-        ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}`
-        : "";
+      const fix = cve.fixedIn ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}` : "";
       lines.push(
         `- ${safeCodeSpan(`${dep.package}@${dep.to}`)} (${dep.ecosystem}): **${cve.severity}** ${safeCodeSpan(cve.id)} — ${promptText(cve.summary)}${fix}`,
       );
@@ -86,9 +84,7 @@ export function renderBrief(
       );
     for (const { dep, cve } of flat) {
       const from = dep.from ? ` from ${safeCodeSpan(dep.from)}` : "";
-      const fix = cve.fixedIn
-        ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}`
-        : "";
+      const fix = cve.fixedIn ? ` — fixed in ${safeCodeSpan(cve.fixedIn)}` : "";
       lines.push(
         `- ${safeCodeSpan(`${dep.file}:${dep.line}`)} resolves transitive ${safeCodeSpan(`${dep.package}@${dep.to}`)} (${dep.ecosystem})${from}: **${cve.severity}** ${safeCodeSpan(cve.id)} — ${promptText(cve.summary)}${fix}`,
       );
@@ -309,9 +305,7 @@ export function renderBrief(
 
   const iacMisconfigs = findings.iacMisconfig ?? [];
   if (iacMisconfigs.length) {
-    const explain = (
-      kind: (typeof iacMisconfigs)[number]["kind"],
-    ): string => {
+    const explain = (kind: (typeof iacMisconfigs)[number]["kind"]): string => {
       switch (kind) {
         case "wildcard-cors-credentials":
           return "allows wildcard CORS together with credentials; browsers can send authenticated cross-origin requests";
@@ -392,6 +386,29 @@ export function renderBrief(
       if (item.partial)
         lines.push("- _(partial — some history could not be retrieved)_");
       lines.push(...entries);
+    }
+  }
+
+  const staticLints = findings.staticLint ?? [];
+  if (staticLints.length) {
+    lines.push("### Static-defect findings (lint — review before merging)");
+    for (const item of staticLints) {
+      const icon = item.severity === "error" ? "**error**" : "warning";
+      lines.push(
+        `- ${safeCodeSpan(`${item.file}:${item.line}`)} — ${icon} ${safeCodeSpan(item.rule)}: ${promptText(item.message)}`,
+      );
+    }
+  }
+
+  const complexityFindings = findings.complexity ?? [];
+  if (complexityFindings.length) {
+    lines.push(
+      "### High-complexity functions (cyclomatic — scrutinize logic paths)",
+    );
+    for (const item of complexityFindings) {
+      lines.push(
+        `- ${safeCodeSpan(item.file)} ${safeCodeSpan(item.function)} — cyclomatic ${item.cyclomatic}, ${item.churn} added line(s)`,
+      );
     }
   }
 

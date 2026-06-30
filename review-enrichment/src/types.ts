@@ -267,6 +267,27 @@ export interface HistoryFinding {
   partial: boolean;
 }
 
+/** A static-defect finding from linting added lines in the diff (#1477). Reports the location + rule name +
+ *  severity + message — public-safe by construction (no source content, no variable values). */
+export interface StaticLintFinding {
+  file: string;
+  line: number;
+  rule: string;
+  severity: "error" | "warning";
+  message: string;
+}
+
+/** A cyclomatic-complexity finding for a changed function (#1477). `cyclomatic` is 1 + decision-point count;
+ *  `churn` is the number of added lines in the function. High complexity + high churn = review priority. */
+export interface ComplexityFinding {
+  file: string;
+  /** Best-effort function name from the declaration; `anonymous` when it cannot be resolved. */
+  function: string;
+  cyclomatic: number;
+  /** Number of added lines in the function body (the churn this PR introduces there). */
+  churn: number;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -287,6 +308,8 @@ export interface BriefFindings {
   iacMisconfig?: IacMisconfigFinding[];
   nativeBuild?: NativeBuildFinding[];
   history?: HistoryFinding[];
+  staticLint?: StaticLintFinding[];
+  complexity?: ComplexityFinding[];
 }
 
 export type AnalyzerStatus = "ok" | "degraded" | "skipped";

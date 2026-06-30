@@ -58,6 +58,15 @@ import {
   scanPatchForIacMisconfig,
   scanIacMisconfig,
 } from "../dist/analyzers/iac-misconfig.js";
+import {
+  detectLanguage,
+  scanPatchForStaticLint,
+  scanPatchForComplexity,
+  scanStaticLint,
+  scanComplexity,
+  countDecisions,
+  extractFunctionName,
+} from "../dist/analyzers/static-analysis.js";
 
 const NOW = new Date("2026-06-26").getTime();
 const eolFetch =
@@ -189,7 +198,7 @@ test("extractLockfileChanges: package-lock version drift with file line, skippin
         '     "node_modules/direct": {',
         '-      "version": "1.0.0",',
         '+      "version": "2.0.0",',
-        '     },',
+        "     },",
         '     "node_modules/minimist": {',
         '-      "version": "1.2.8",',
         '+      "version": "0.0.8",',
@@ -602,7 +611,10 @@ test("buildBrief: lockfile-drift analyzer runs and renders OSV findings", async 
     });
     assert.equal(brief.analyzerStatus.lockfileDrift, "ok");
     assert.equal(brief.findings.lockfileDrift.length, 1);
-    assert.match(brief.promptSection, /Vulnerable lockfile-only dependency drift/);
+    assert.match(
+      brief.promptSection,
+      /Vulnerable lockfile-only dependency drift/,
+    );
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1225,7 +1237,7 @@ test("scanWorkflowPins: flags unpinned third-party actions with YAML-equivalent 
   const patch = [
     "@@ -1,0 +1,3 @@",
     "+      - uses : tj-actions/changed-files@v44",
-    "+      - \"uses\": third-party/action@main",
+    '+      - "uses": third-party/action@main',
     "+      - 'uses' : quoted/action@v1",
   ].join("\n");
   const findings = scanWorkflowPins(".github/workflows/ci.yml", patch);
@@ -1593,9 +1605,7 @@ test("extractDependencyChanges: caps manifest files and patch lines", () => {
     [
       {
         path: "package.json",
-        patch: ['+    "first": "1.0.0",', '+    "second": "1.0.0",'].join(
-          "\n",
-        ),
+        patch: ['+    "first": "1.0.0",', '+    "second": "1.0.0",'].join("\n"),
       },
       { path: "nested/package.json", patch: '+    "third": "1.0.0",' },
     ],
@@ -1638,9 +1648,13 @@ test("buildBrief: timeout aborts dependency scan so OSV work stops", async () =>
     fetchCount += 1;
     signals.push(init.signal);
     return await new Promise((_resolve, reject) => {
-      init.signal.addEventListener("abort", () => reject(new Error("aborted")), {
-        once: true,
-      });
+      init.signal.addEventListener(
+        "abort",
+        () => reject(new Error("aborted")),
+        {
+          once: true,
+        },
+      );
     });
   };
 
@@ -1694,12 +1708,14 @@ test("parseCodeowners: caps repository-controlled size, rule count, and pattern 
 });
 
 test("findOwners: preserves CODEOWNERS anchoring and last-match-wins semantics", () => {
-  const rules = parseCodeowners([
-    "*.ts @global/ts",
-    "/src/*.ts @root/src",
-    "docs/ @docs/team",
-    "src/special.ts @last/match",
-  ].join("\n"));
+  const rules = parseCodeowners(
+    [
+      "*.ts @global/ts",
+      "/src/*.ts @root/src",
+      "docs/ @docs/team",
+      "src/special.ts @last/match",
+    ].join("\n"),
+  );
 
   assert.deepEqual(findOwners(rules, "nested/file.ts"), ["@global/ts"]);
   assert.deepEqual(findOwners(rules, "src/file.ts"), ["@root/src"]);
@@ -1935,37 +1951,29 @@ test("hasNpmAttestation: returns false on 404 (no attestation)", async () => {
 });
 
 test("hasNpmAttestation: returns true when attestations array is non-empty", async () => {
-  const result = await hasNpmAttestation(
-    "attested-pkg",
-    "1.0.0",
-    async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ attestations: [{ predicateType: "slsa" }] }),
-    }),
-  );
+  const result = await hasNpmAttestation("attested-pkg", "1.0.0", async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ attestations: [{ predicateType: "slsa" }] }),
+  }));
   assert.equal(result, true);
 });
 
 test("hasNpmAttestation: returns false when attestations array is empty", async () => {
-  const result = await hasNpmAttestation(
-    "empty-attest",
-    "1.0.0",
-    async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ attestations: [] }),
-    }),
-  );
+  const result = await hasNpmAttestation("empty-attest", "1.0.0", async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ attestations: [] }),
+  }));
   assert.equal(result, false);
 });
 
 test("hasNpmAttestation: returns true (fail-safe) on non-404 registry error", async () => {
-  const result = await hasNpmAttestation(
-    "pkg",
-    "1.0.0",
-    async () => ({ ok: false, status: 500, json: async () => ({}) }),
-  );
+  const result = await hasNpmAttestation("pkg", "1.0.0", async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({}),
+  }));
   assert.equal(result, true);
 });
 
@@ -1985,7 +1993,11 @@ test("hasNpmAttestation: returns true (fail-safe) when signal is already aborted
     "1.0.0",
     async () => {
       called = true;
-      return { ok: true, status: 200, json: async () => ({ attestations: [] }) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ attestations: [] }),
+      };
     },
     controller.signal,
   );
@@ -1998,58 +2010,46 @@ test("hasNpmAttestation: returns true (fail-safe) when signal is already aborted
 // ---------------------------------------------------------------------------
 
 test("hasPypiProvenance: returns true when matching file has provenance field", async () => {
-  const result = await hasPypiProvenance(
-    "requests",
-    "2.31.0",
-    async () => ({
-      ok: true,
-      json: async () => ({
-        files: [
-          {
-            filename: "requests-2.31.0-py3-none-any.whl",
-            provenance: "https://files.pythonhosted.org/.../requests-2.31.0-py3-none-any.whl.provenance",
-          },
-        ],
-      }),
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => ({
+    ok: true,
+    json: async () => ({
+      files: [
+        {
+          filename: "requests-2.31.0-py3-none-any.whl",
+          provenance:
+            "https://files.pythonhosted.org/.../requests-2.31.0-py3-none-any.whl.provenance",
+        },
+      ],
     }),
-  );
+  }));
   assert.equal(result, true);
 });
 
 test("hasPypiProvenance: returns false when matching file lacks provenance field", async () => {
-  const result = await hasPypiProvenance(
-    "requests",
-    "2.31.0",
-    async () => ({
-      ok: true,
-      json: async () => ({
-        files: [{ filename: "requests-2.31.0-py3-none-any.whl" }],
-      }),
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => ({
+    ok: true,
+    json: async () => ({
+      files: [{ filename: "requests-2.31.0-py3-none-any.whl" }],
     }),
-  );
+  }));
   assert.equal(result, false);
 });
 
 test("hasPypiProvenance: returns true (fail-safe) when no file matches the version", async () => {
-  const result = await hasPypiProvenance(
-    "requests",
-    "2.31.0",
-    async () => ({
-      ok: true,
-      json: async () => ({
-        files: [{ filename: "requests-2.30.0-py3-none-any.whl" }],
-      }),
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => ({
+    ok: true,
+    json: async () => ({
+      files: [{ filename: "requests-2.30.0-py3-none-any.whl" }],
     }),
-  );
+  }));
   assert.equal(result, true);
 });
 
 test("hasPypiProvenance: returns true (fail-safe) on non-ok response", async () => {
-  const result = await hasPypiProvenance(
-    "requests",
-    "2.31.0",
-    async () => ({ ok: false, json: async () => ({}) }),
-  );
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => ({
+    ok: false,
+    json: async () => ({}),
+  }));
   assert.equal(result, true);
 });
 
@@ -2099,63 +2099,96 @@ test("hasPypiProvenance: passes Accept header for PEP 740 simple API", async () 
 // ---------------------------------------------------------------------------
 
 test("matchesPypiVersion: matches wheel filename for exact version", () => {
-  assert.equal(matchesPypiVersion("requests-2.31.0-py3-none-any.whl", "requests", "2.31.0"), true);
+  assert.equal(
+    matchesPypiVersion(
+      "requests-2.31.0-py3-none-any.whl",
+      "requests",
+      "2.31.0",
+    ),
+    true,
+  );
 });
 
 test("matchesPypiVersion: matches sdist .tar.gz filename for exact version", () => {
-  assert.equal(matchesPypiVersion("requests-2.31.0.tar.gz", "requests", "2.31.0"), true);
+  assert.equal(
+    matchesPypiVersion("requests-2.31.0.tar.gz", "requests", "2.31.0"),
+    true,
+  );
 });
 
 test("matchesPypiVersion: matches sdist .zip filename for exact version", () => {
-  assert.equal(matchesPypiVersion("requests-2.31.0.zip", "requests", "2.31.0"), true);
+  assert.equal(
+    matchesPypiVersion("requests-2.31.0.zip", "requests", "2.31.0"),
+    true,
+  );
 });
 
 test("matchesPypiVersion: rejects post-release suffix (version substring of longer version)", () => {
   // 2.31.0 is a substring of 2.31.0.post1 — must NOT match
-  assert.equal(matchesPypiVersion("requests-2.31.0.post1-py3-none-any.whl", "requests", "2.31.0"), false);
+  assert.equal(
+    matchesPypiVersion(
+      "requests-2.31.0.post1-py3-none-any.whl",
+      "requests",
+      "2.31.0",
+    ),
+    false,
+  );
 });
 
 test("matchesPypiVersion: rejects version with shared numeric suffix (prefix overlap)", () => {
   // 2.31.0 is a substring of 12.31.0 — must NOT match
-  assert.equal(matchesPypiVersion("requests-12.31.0-py3-none-any.whl", "requests", "2.31.0"), false);
+  assert.equal(
+    matchesPypiVersion(
+      "requests-12.31.0-py3-none-any.whl",
+      "requests",
+      "2.31.0",
+    ),
+    false,
+  );
 });
 
 test("matchesPypiVersion: matches hyphenated package name normalised to underscore in wheel", () => {
   // PyPI normalises my-package → my_package in wheel filenames (PEP 503)
-  assert.equal(matchesPypiVersion("my_package-1.0.0-py3-none-any.whl", "my-package", "1.0.0"), true);
+  assert.equal(
+    matchesPypiVersion(
+      "my_package-1.0.0-py3-none-any.whl",
+      "my-package",
+      "1.0.0",
+    ),
+    true,
+  );
 });
 
 test("matchesPypiVersion: rejects filename from a different package", () => {
-  assert.equal(matchesPypiVersion("other-requests-2.31.0-py3-none-any.whl", "requests", "2.31.0"), false);
+  assert.equal(
+    matchesPypiVersion(
+      "other-requests-2.31.0-py3-none-any.whl",
+      "requests",
+      "2.31.0",
+    ),
+    false,
+  );
 });
 
 test("hasPypiProvenance: returns true (fail-safe) when only post-release file exists for version", async () => {
   // The API returns requests-2.31.0.post1 files; no file for exact 2.31.0 → can't determine → don't flag
-  const result = await hasPypiProvenance(
-    "requests",
-    "2.31.0",
-    async () => ({
-      ok: true,
-      json: async () => ({
-        files: [{ filename: "requests-2.31.0.post1-py3-none-any.whl" }],
-      }),
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => ({
+    ok: true,
+    json: async () => ({
+      files: [{ filename: "requests-2.31.0.post1-py3-none-any.whl" }],
     }),
-  );
+  }));
   assert.equal(result, true);
 });
 
 test("hasPypiProvenance: returns true (fail-safe) when only a different version with shared suffix exists", async () => {
   // 12.31.0 contains "2.31.0" as substring; must not be treated as a match for version 2.31.0
-  const result = await hasPypiProvenance(
-    "requests",
-    "2.31.0",
-    async () => ({
-      ok: true,
-      json: async () => ({
-        files: [{ filename: "requests-12.31.0-py3-none-any.whl" }],
-      }),
+  const result = await hasPypiProvenance("requests", "2.31.0", async () => ({
+    ok: true,
+    json: async () => ({
+      files: [{ filename: "requests-12.31.0-py3-none-any.whl" }],
     }),
-  );
+  }));
   assert.equal(result, true);
 });
 
@@ -2171,12 +2204,14 @@ test("scanProvenance: flags added binary and vendored files, skips modified and 
       files: [
         { path: "vendor/lib/util.js", status: "added" },
         { path: "native/module.exe", status: "added" },
-        { path: "src/app.ts", status: "added" },           // source — null
-        { path: "native/old.exe", status: "modified" },    // not added — skip
-        { path: "removed.exe", status: "removed" },        // not added — skip
+        { path: "src/app.ts", status: "added" }, // source — null
+        { path: "native/old.exe", status: "modified" }, // not added — skip
+        { path: "removed.exe", status: "removed" }, // not added — skip
       ],
     },
-    async () => { throw new Error("should not fetch"); },
+    async () => {
+      throw new Error("should not fetch");
+    },
   );
   assert.equal(findings.length, 2);
   assert.equal(findings[0].kind, "vendored");
@@ -2202,8 +2237,13 @@ test("scanProvenance: flags npm dep without attestation, skips one with attestat
     },
     async (url) => {
       const u = String(url);
-      if (u.includes("no-attest-pkg")) return { ok: false, status: 404, json: async () => ({}) };
-      return { ok: true, status: 200, json: async () => ({ attestations: [{ predicateType: "slsa" }] }) };
+      if (u.includes("no-attest-pkg"))
+        return { ok: false, status: 404, json: async () => ({}) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ attestations: [{ predicateType: "slsa" }] }),
+      };
     },
   );
   assert.equal(findings.length, 1);
@@ -2249,7 +2289,11 @@ test("scanProvenance: skips Go ecosystem (no attestation API)", async () => {
     },
     async () => {
       fetchCalled = true;
-      return { ok: true, status: 200, json: async () => ({ attestations: [] }) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ attestations: [] }),
+      };
     },
   );
   assert.equal(findings.length, 0);
@@ -2283,7 +2327,9 @@ test("scanProvenance: caps findings at MAX_FINDINGS (binary detection path)", as
   }));
   const findings = await scanProvenance(
     { repoFullName: "o/r", prNumber: 1, files },
-    async () => { throw new Error("should not fetch"); },
+    async () => {
+      throw new Error("should not fetch");
+    },
   );
   assert.equal(findings.length, 30); // MAX_FINDINGS
 });
@@ -2337,7 +2383,9 @@ test("scanProvenance: skips deps that fail isSafeToCheck (overly long name or in
 test("scanProvenance: handles undefined files gracefully", async () => {
   const findings = await scanProvenance(
     { repoFullName: "o/r", prNumber: 1 },
-    async () => { throw new Error("should not fetch"); },
+    async () => {
+      throw new Error("should not fetch");
+    },
   );
   assert.deepEqual(findings, []);
 });
@@ -2564,7 +2612,12 @@ test("scanAssetWeight: small growth is not flagged", async () => {
 test("renderBrief: renders no-attestation, binary, and vendored sections", () => {
   const r = renderBrief({
     provenance: [
-      { kind: "no-attestation", ecosystem: "npm", package: "evil", version: "1.0.0" },
+      {
+        kind: "no-attestation",
+        ecosystem: "npm",
+        package: "evil",
+        version: "1.0.0",
+      },
       { kind: "binary", file: "build/tool.exe" },
       { kind: "vendored", file: "vendor/lib/helper.js" },
     ],
@@ -2586,9 +2639,7 @@ test("renderBrief: empty provenance array produces no provenance section", () =>
 
 test("renderBrief: provenance escapes control chars and backticks in file paths", () => {
   const r = renderBrief({
-    provenance: [
-      { kind: "binary", file: "build/tool`\n### injected" },
-    ],
+    provenance: [{ kind: "binary", file: "build/tool`\n### injected" }],
   });
   assert.doesNotMatch(r.promptSection, /\n### injected/);
   assert.match(r.promptSection, /binary artifact without source documentation/);
@@ -2728,21 +2779,38 @@ test("scanAssetWeight: fail-safe — no token, no binaries, or failed fetch retu
     treeReply([{ path: "a.png", type: "blob", size: 999999 }]);
   assert.deepEqual(
     await scanAssetWeight(
-      { repoFullName: "o/r", prNumber: 1, headSha: HEAD_SHA, files: [{ path: "a.png", status: "added" }] },
+      {
+        repoFullName: "o/r",
+        prNumber: 1,
+        headSha: HEAD_SHA,
+        files: [{ path: "a.png", status: "added" }],
+      },
       tree,
     ),
     [],
   ); // no token
   assert.deepEqual(
     await scanAssetWeight(
-      { repoFullName: "o/r", prNumber: 1, headSha: HEAD_SHA, githubToken: "t", files: [{ path: "readme.md", status: "added" }] },
+      {
+        repoFullName: "o/r",
+        prNumber: 1,
+        headSha: HEAD_SHA,
+        githubToken: "t",
+        files: [{ path: "readme.md", status: "added" }],
+      },
       tree,
     ),
     [],
   ); // no binary files
   assert.deepEqual(
     await scanAssetWeight(
-      { repoFullName: "o/r", prNumber: 1, headSha: HEAD_SHA, githubToken: "t", files: [{ path: "a.png", status: "added" }] },
+      {
+        repoFullName: "o/r",
+        prNumber: 1,
+        headSha: HEAD_SHA,
+        githubToken: "t",
+        files: [{ path: "a.png", status: "added" }],
+      },
       async () => ({ ok: false, json: async () => ({}) }),
     ),
     [],
@@ -2756,10 +2824,21 @@ test("scanAssetWeight: rejects path-traversal repoFullName + non-SHA refs (no to
     return treeReply([{ path: "a.png", type: "blob", size: 999999 }]);
   };
   const file = { path: "a.png", status: "added" };
-  for (const repoFullName of ["a/b/../../x/y", "../evil", "owner/repo/extra", "o/.."]) {
+  for (const repoFullName of [
+    "a/b/../../x/y",
+    "../evil",
+    "owner/repo/extra",
+    "o/..",
+  ]) {
     assert.deepEqual(
       await scanAssetWeight(
-        { repoFullName, prNumber: 1, headSha: HEAD_SHA, githubToken: "t", files: [file] },
+        {
+          repoFullName,
+          prNumber: 1,
+          headSha: HEAD_SHA,
+          githubToken: "t",
+          files: [file],
+        },
         spy,
       ),
       [],
@@ -2767,18 +2846,33 @@ test("scanAssetWeight: rejects path-traversal repoFullName + non-SHA refs (no to
   }
   assert.deepEqual(
     await scanAssetWeight(
-      { repoFullName: "o/r", prNumber: 1, headSha: "main", githubToken: "t", files: [file] },
+      {
+        repoFullName: "o/r",
+        prNumber: 1,
+        headSha: "main",
+        githubToken: "t",
+        files: [file],
+      },
       spy,
     ),
     [],
   );
-  assert.equal(fetched, false, "the token-bearing fetch never runs for unsafe input");
+  assert.equal(
+    fetched,
+    false,
+    "the token-bearing fetch never runs for unsafe input",
+  );
 });
 
 test("renderBrief: renders the asset-weight block with human-readable sizes", () => {
   const r = renderBrief({
     assetWeight: [
-      { path: "img/logo.png", bytes: 2500000, deltaBytes: 2500000, status: "added" },
+      {
+        path: "img/logo.png",
+        bytes: 2500000,
+        deltaBytes: 2500000,
+        status: "added",
+      },
       { path: "v.mp4", bytes: 300000, deltaBytes: 200000, status: "grown" },
     ],
   });
@@ -2835,9 +2929,15 @@ test("detectSecretLog: flags sensitive data into a sink as CODE, not string mess
     detectSecretLog("logger.info(`token=${apiKey}`);")?.category,
     "secret",
   );
-  assert.equal(detectSecretLog("log.error(user.password);")?.category, "secret");
+  assert.equal(
+    detectSecretLog("log.error(user.password);")?.category,
+    "secret",
+  );
   assert.equal(detectSecretLog("console.debug(account.ssn);")?.category, "pii");
-  assert.equal(detectSecretLog("console.log(req);")?.category, "request-object");
+  assert.equal(
+    detectSecretLog("console.log(req);")?.category,
+    "request-object",
+  );
   assert.equal(
     detectSecretLog("process.stdout.write(session.cookie);")?.sink,
     "process.stdout.write",
@@ -2987,7 +3087,9 @@ test("buildBrief: secret-log analyzer runs (pure, no network)", async () => {
 
 test("buildBrief: provenance analyzer fetch failure fails safe", async () => {
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => { throw new Error("network down"); };
+  globalThis.fetch = async () => {
+    throw new Error("network down");
+  };
   try {
     const brief = await buildBrief({
       repoFullName: "o/r",
@@ -2998,6 +3100,241 @@ test("buildBrief: provenance analyzer fetch failure fails safe", async () => {
     assert.equal(brief.analyzerStatus.provenance, "ok");
     assert.equal(brief.partial, false);
     assert.deepEqual(brief.findings.provenance, []);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// ── static-analysis + complexity analyzer (#1477) ─────────────────────────────
+
+test("detectLanguage: maps extensions to languages; null for non-source", () => {
+  assert.equal(detectLanguage("src/app.ts"), "typescript");
+  assert.equal(detectLanguage("src/app.tsx"), "typescript");
+  assert.equal(detectLanguage("src/app.js"), "javascript");
+  assert.equal(detectLanguage("src/app.jsx"), "javascript");
+  assert.equal(detectLanguage("src/app.py"), "python");
+  assert.equal(detectLanguage("src/app.go"), "go");
+  assert.equal(detectLanguage("README.md"), null);
+  assert.equal(detectLanguage("Dockerfile"), null);
+});
+
+test("scanPatchForStaticLint: flags eval, debugger, console, empty-catch, == in TS", () => {
+  const patch = [
+    "@@ -1,3 +1,8 @@",
+    " const ok = true;",
+    "+eval(userInput);",
+    "+debugger;",
+    '+console.log("debug");',
+    "+try { x() } catch (e) {}",
+    "+if (x == y) return;",
+    "+const clean = true;",
+  ].join("\n");
+  const findings = scanPatchForStaticLint("src/app.ts", patch);
+  const rules = findings.map((f) => f.rule);
+  assert.ok(rules.includes("no-eval"));
+  assert.ok(rules.includes("no-debugger"));
+  assert.ok(rules.includes("no-console"));
+  assert.ok(rules.includes("no-empty-catch"));
+  assert.ok(rules.includes("eqeqeq"));
+  assert.equal(findings.length, 5);
+  assert.equal(findings[0].line, 2);
+  assert.equal(findings[0].severity, "error");
+});
+
+test("scanPatchForStaticLint: no findings for non-source files or clean code", () => {
+  assert.deepEqual(scanPatchForStaticLint("README.md", "+some text"), []);
+  assert.deepEqual(
+    scanPatchForStaticLint("src/app.ts", "+const x = 1;\n+const y = 2;"),
+    [],
+  );
+});
+
+test("scanPatchForStaticLint: caps at maxFindings", () => {
+  const patch = [
+    "@@ -1,0 +1,5 @@",
+    "+console.log(1);",
+    "+console.log(2);",
+    "+console.log(3);",
+    "+console.log(4);",
+    "+console.log(5);",
+  ].join("\n");
+  const findings = scanPatchForStaticLint("src/app.ts", patch, {
+    maxFindings: 2,
+  });
+  assert.equal(findings.length, 2);
+});
+
+test("scanPatchForStaticLint: Python bare-except is flagged", () => {
+  const patch = "@@ -1,0 +1,3 @@\n+try:\n+except:\n+    pass";
+  const findings = scanPatchForStaticLint("src/app.py", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "no-bare-except");
+});
+
+test("countDecisions + extractFunctionName: helpers are pure", () => {
+  assert.equal(countDecisions("if (x) {"), 1);
+  assert.equal(countDecisions("for (let i = 0; i < n; i++) {"), 1);
+  assert.equal(countDecisions("x && y || z ? a : b"), 3);
+  assert.equal(countDecisions("const x = 1;"), 0);
+  assert.equal(extractFunctionName("function foo() {"), "foo");
+  assert.equal(extractFunctionName("const bar = async (x) => {"), "bar");
+  assert.equal(extractFunctionName("const x = 1;"), null);
+});
+
+test("scanPatchForComplexity: flags a high-complexity function, skips simple ones", () => {
+  const patch = [
+    "@@ -1,0 +1,20 @@",
+    "+function complex(a, b, c) {",
+    "+  if (a && b) {",
+    "+    for (let i = 0; i < c; i++) {",
+    "+      if (i || a) {",
+    "+        while (x) {",
+    "+          if (a && b || c) {",
+    "+          }",
+    "+        }",
+    "+      }",
+    "+    }",
+    "+  }",
+    "+  return a ? b : c;",
+    "+}",
+    "+function simple() {",
+    "+  return 1;",
+    "+}",
+  ].join("\n");
+  const findings = scanPatchForComplexity("src/app.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].function, "complex");
+  assert.ok(findings[0].cyclomatic > 10);
+  assert.ok(findings[0].churn > 0);
+});
+
+test("scanPatchForComplexity: detects added decisions inside an EXISTING function (context declaration)", () => {
+  // The function declaration is a CONTEXT line (no +/-); the decision lines are ADDED.
+  const patch = [
+    "@@ -10,3 +10,16 @@",
+    " function existing() {",
+    "+  if (a && b) {",
+    "+    for (let i = 0; i < n; i++) {",
+    "+      if (x || y) {",
+    "+        while (z) {",
+    "+          if (a && b || c) {",
+    "+          }",
+    "+        }",
+    "+      }",
+    "+    }",
+    "+  }",
+    "  return result;",
+    " }",
+  ].join("\n");
+  const findings = scanPatchForComplexity("src/app.ts", patch);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].function, "existing");
+  assert.ok(
+    findings[0].cyclomatic >= 10,
+    `expected >= 10, got ${findings[0].cyclomatic}`,
+  );
+  assert.equal(findings[0].churn, 10); // 10 added decision lines
+});
+
+test("scanPatchForComplexity: else-if is counted as one decision", () => {
+  assert.equal(countDecisions("else if (x) {"), 1);
+  assert.equal(countDecisions("if (a) {} else if (b) {}"), 2);
+});
+
+test("scanPatchForComplexity: no findings for non-source or simple diffs", () => {
+  assert.deepEqual(scanPatchForComplexity("README.md", "+some text"), []);
+  assert.deepEqual(
+    scanPatchForComplexity("src/app.ts", "+const x = 1;\n+const y = 2;"),
+    [],
+  );
+});
+
+test("scanPatchForComplexity: limited to TS/JS — Python/Go skipped until function-end tracking lands", () => {
+  const pyPatch = [
+    "@@ -1,0 +1,10 @@",
+    "+def complex(a, b, c):",
+    "+    if a and b:",
+    "+        for i in range(c):",
+    "+            if i or a:",
+    "+                while x:",
+    "+                    if a and b or c:",
+    "+                        pass",
+    "+    return a",
+  ].join("\n");
+  assert.deepEqual(scanPatchForComplexity("src/app.py", pyPatch), []);
+
+  const goPatch = [
+    "@@ -1,0 +1,10 @@",
+    "+func complex(a, b, c int) int {",
+    "+    if a > 0 && b > 0 {",
+    "+        for i := 0; i < c; i++ {",
+    "+            if i == 0 || a == 0 {",
+    "+            }",
+    "+        }",
+    "+    }",
+    "+}",
+  ].join("\n");
+  assert.deepEqual(scanPatchForComplexity("src/app.go", goPatch), []);
+});
+
+test("renderBrief: renders the static-lint block", () => {
+  const r = renderBrief({
+    staticLint: [
+      {
+        file: "src/app.ts",
+        line: 5,
+        rule: "no-eval",
+        severity: "error",
+        message: "eval() is dangerous.",
+      },
+      {
+        file: "src/app.ts",
+        line: 8,
+        rule: "no-console",
+        severity: "warning",
+        message: "Remove console.",
+      },
+    ],
+  });
+  assert.match(r.promptSection, /Static-defect findings/);
+  assert.match(r.promptSection, /`src\/app\.ts:5`/);
+  assert.match(r.promptSection, /\*\*error\*\* `no-eval`/);
+  assert.match(r.promptSection, /warning `no-console`/);
+});
+
+test("renderBrief: renders the complexity block", () => {
+  const r = renderBrief({
+    complexity: [
+      { file: "src/app.ts", function: "complex", cyclomatic: 15, churn: 12 },
+    ],
+  });
+  assert.match(r.promptSection, /High-complexity functions/);
+  assert.match(r.promptSection, /cyclomatic 15, 12 added line/);
+});
+
+test("buildBrief: static-lint + complexity analyzers run (pure, no network)", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+  try {
+    const brief = await buildBrief({
+      repoFullName: "o/r",
+      prNumber: 1,
+      analyzers: ["staticLint", "complexity"],
+      files: [
+        {
+          path: "src/app.ts",
+          patch: [
+            "@@ -1,0 +1,3 @@",
+            "+eval(x);",
+            "+debugger;",
+            '+console.log("x");',
+          ].join("\n"),
+        },
+      ],
+    });
+    assert.equal(brief.analyzerStatus.staticLint, "ok");
+    assert.equal(brief.findings.staticLint.length, 3);
+    assert.match(brief.promptSection, /Static-defect findings/);
   } finally {
     globalThis.fetch = realFetch;
   }
